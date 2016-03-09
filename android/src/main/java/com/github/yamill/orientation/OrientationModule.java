@@ -1,84 +1,76 @@
 package com.github.yamill.orientation;
 
 import android.app.Activity;
-import android.content.BroadcastReceiver;
-import android.content.Context;
-import android.content.Intent;
-import android.content.IntentFilter;
 import android.content.pm.ActivityInfo;
-import android.content.res.Configuration;
+import android.hardware.SensorManager;
 import android.util.Log;
+import android.view.OrientationEventListener;
 
-import com.facebook.common.logging.FLog;
 import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.Callback;
 import com.facebook.react.bridge.LifecycleEventListener;
 import com.facebook.react.bridge.ReactApplicationContext;
+import com.facebook.react.bridge.ReactContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.bridge.WritableMap;
-import com.facebook.react.common.ReactConstants;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
 
-public class OrientationModule extends ReactContextBaseJavaModule {
+public class OrientationModule extends ReactContextBaseJavaModule implements LifecycleEventListener {
     final private Activity mActivity;
+    private OrientationEventListener mOrientationEventListener;
+    private String mLastOrientation;
+    private final ReactContext mReactContext;
+
+    private String TAG = "Orientation";
 
     public OrientationModule(ReactApplicationContext reactContext, final Activity activity) {
         super(reactContext);
 
         mActivity = activity;
+        mReactContext = reactContext;
 
         final ReactApplicationContext ctx = reactContext;
 
-        final BroadcastReceiver receiver = new BroadcastReceiver() {
+        // we use this technic instead of Configuration changes because
+        // we want to listen to orientation changes even when the screen
+        // is locked in a particuliar position.
+        mOrientationEventListener = new OrientationEventListener(reactContext, SensorManager.SENSOR_DELAY_NORMAL) {
             @Override
-            public void onReceive(Context context, Intent intent) {
-                Configuration newConfig = intent.getParcelableExtra("newConfig");
-                Log.d("receiver", String.valueOf(newConfig.orientation));
+            public void onOrientationChanged(int orientation) {
+                Log.d(TAG, String.valueOf(orientation));
 
-                String orientationValue = newConfig.orientation == 1 ? "PORTRAIT" : "LANDSCAPE";
+                String newOrientation;
 
-                WritableMap params = Arguments.createMap();
-                params.putString("orientation", orientationValue);
-
-                ctx
-                        .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
-                        .emit("orientationDidChange", params);
-            }
-        };
-
-        activity.registerReceiver(receiver, new IntentFilter("onConfigurationChanged"));
-
-        LifecycleEventListener listener = new LifecycleEventListener() {
-            @Override
-            public void onHostResume() {
-                activity.registerReceiver(receiver, new IntentFilter("onConfigurationChanged"));
-            }
-
-            @Override
-            public void onHostPause() {
-                try
-                {
-                    activity.unregisterReceiver(receiver);
+                if (350 < orientation || orientation < 10) {
+                    newOrientation = "PORTRAIT";
+                } else if (260 < orientation && orientation < 280) {
+                    newOrientation = "LANDSCAPELEFT";
+                } else if (170 < orientation && orientation < 190) {
+                    newOrientation = "PORTRAITUPSIDEDOWN";
+                } else if (80 < orientation && orientation < 100) {
+                    newOrientation = "LANDSCAPERIGHT";
+                } else {
+                    newOrientation = "PORTRAIT";
                 }
-                catch (java.lang.IllegalArgumentException e) {
-                    FLog.e(ReactConstants.TAG, "receiver already unregistered", e);
-                }
-            }
 
-            @Override
-            public void onHostDestroy() {
-                try
-                {
-                    activity.unregisterReceiver(receiver);
-                }
-                catch (java.lang.IllegalArgumentException e) {
-                    FLog.e(ReactConstants.TAG, "receiver already unregistered", e);
+                if (!newOrientation.equals(mLastOrientation)) {
+                    mLastOrientation = newOrientation;
+
+                    WritableMap params = Arguments.createMap();
+                    params.putString("orientation", mLastOrientation);
+
+                    if (mReactContext.hasActiveCatalystInstance()) {
+                        mReactContext
+                                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
+                                .emit("orientationDidChange", params);
+                    }
                 }
             }
         };
 
-        reactContext.addLifecycleEventListener(listener);
+        mOrientationEventListener.enable();
+
     }
 
     @Override
@@ -86,19 +78,24 @@ public class OrientationModule extends ReactContextBaseJavaModule {
         return "Orientation";
     }
 
+    @Override
+    public void onHostResume() {
+        mOrientationEventListener.enable();
+    }
+
+    @Override
+    public void onHostPause() {
+        mOrientationEventListener.disable();
+    }
+
+    @Override
+    public void onHostDestroy() {
+        mOrientationEventListener.disable();
+    }
+
     @ReactMethod
     public void getOrientation(Callback callback) {
-        final int orientation = getReactApplicationContext().getResources().getConfiguration().orientation;
-
-        if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
-            callback.invoke(null, "LANDSCAPE");
-        } else if (orientation == Configuration.ORIENTATION_PORTRAIT) {
-            callback.invoke(null, "PORTRAIT");
-        } else if (orientation == Configuration.ORIENTATION_UNDEFINED) {
-            callback.invoke(null, "UNKNOWN");
-        } else {
-            callback.invoke(orientation, null);
-        }
+        callback.invoke(mLastOrientation, null);
     }
 
     @ReactMethod
